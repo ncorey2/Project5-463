@@ -5,7 +5,9 @@ fun MAC(bitstring,key):bitstring.
 
 let Alice(k:key) =
 
+0.
+
 
 process
 new k:key;
-(!Alice(k))
+(!Alice(k)) 
