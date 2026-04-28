@@ -1,13 +1,71 @@
 type key.
+type nonce.
 free c: channel.
 
+fun nonce_to_bitstring(nonce):bitstring [data, typeConverter].
+fun bitstring_to_nonce(bitstring):nonce [data, typeConverter].
+free mA:bitstring [private].
+free mB:bitstring [private].
 fun MAC(bitstring,key):bitstring.
+fun senc(key,key):bitstring.
+fun senc1(bitstring,key):bitstring.
 
-let Alice(k:key) =
+reduc forall m:key,k:key; sdec(senc(m,k),k) = m.
+reduc forall m:bitstring,k:key; sdec1(senc1(m,k),k) = m.
 
-0.
+
+query attacker(mA); attacker(mB).
+event MessageAuthenticated().
+query event(MessageAuthenticated()).
+
+
+
+
+
+let EntityA(masterA:key) =
+new sessionKey:key;
+let encryptA = senc(sessionKey, masterA) in
+out(c, encryptA);
+in(c, encryptB:bitstring);
+let sendToB = encryptB in
+out(c, sendToB);
+(* Bringing in new data from Entity B *)
+in(c, (data:bitstring, IB1:bitstring));
+let (messageB_:bitstring,NB1_:bitstring) = sdec1(data, sessionKey) in
+if MAC((messageB_, NB1_), sessionKey) = IB1 then
+new NA1:nonce;
+new messageA:bitstring;
+let dataA = senc1((messageA, nonce_to_bitstring(NA1), NB1_), sessionKey) in
+let IA1 = MAC((messageA, nonce_to_bitstring(NA1), NB1_), sessionKey) in
+out(c, (dataA, IA1)).
+
+
+
+
+let KeyCenter(masterA:key,masterB:key) =
+in(c, encryptA:bitstring);
+let sessionKeyA = sdec(encryptA, masterA) in
+let encryptB = senc(sessionKeyA,masterB) in
+out(c, encryptB).
+
+let EntityB(masterB:key) =
+in(c, sendToB:bitstring);
+let sessionKey = sdec(sendToB, masterB) in
+new messageB:bitstring;
+(* After recieved shared key, starting message authentication*)
+new NB1:nonce;
+let data = senc1((messageB, nonce_to_bitstring(NB1)), sessionKey) in
+let IB1 = MAC((messageB, nonce_to_bitstring(NB1)), sessionKey) in
+out(c, (data, IB1));
+
+(* Bringing in new data from Entity A *)
+in(c, (dataA:bitstring, IA1:bitstring));
+let (messageA_:bitstring, NA1_:bitstring, NB1_:bitstring) = sdec1(dataA, sessionKey) in
+if MAC((messageA_, NA1_, NB1_), sessionKey) = IA1 then 
+if NB1 = bitstring_to_nonce(NB1_) then event MessageAuthenticated().
 
 
 process
-new k:key;
-(!Alice(k)) 
+new masterA:key;
+new masterB:key;
+(!EntityA(masterA) | !KeyCenter(masterA,masterB) | !EntityB(masterB)) 
