@@ -1,28 +1,29 @@
 type key.
 type nonce.
 free c: channel.
+type id.
+
 
 fun nonce_to_bitstring(nonce):bitstring [data, typeConverter].
 fun bitstring_to_nonce(bitstring):nonce [data, typeConverter].
 free mA:bitstring [private].
 free mB:bitstring [private].
-fun MAC(bitstring,key):bitstring.
+fun MAC(bitstring, id, key):bitstring.
 fun senc(key,key):bitstring.
 fun senc1(bitstring,key):bitstring.
 
 reduc forall m:key,k:key; sdec(senc(m,k),k) = m.
 reduc forall m:bitstring,k:key; sdec1(senc1(m,k),k) = m.
 
+event Entity1Authenticated(id, id).
+event Entity2Authenticated(id, id).
 
 query attacker(mA); attacker(mB).
-event MessageAuthenticated().
-query event(MessageAuthenticated()).
+query aId:id, bId:id;
+event(Entity2Authenticated(aId, bId)) ==> event(Entity1Authenticated(aId, bId)).
 
 
-
-
-
-let EntityA(masterA:key) =
+let EntityA(masterA:key, aId:id) =
 new sessionKey:key;
 let encryptA = senc(sessionKey, masterA) in
 out(c, encryptA);
@@ -30,16 +31,17 @@ in(c, encryptB:bitstring);
 let sendToB = encryptB in
 out(c, sendToB);
 (* Bringing in new data from Entity B *)
-in(c, (data:bitstring, IB1:bitstring));
+in(c, (data:bitstring, IB1:bitstring, bId:id));
 let (messageB_:bitstring,NB1_:bitstring) = sdec1(data, sessionKey) in
-if MAC((messageB_, NB1_), sessionKey) = IB1 then
+if MAC((messageB_, NB1_), bId, sessionKey) = IB1 then
 new NA1:nonce;
 new messageA:bitstring;
 let dataA = senc1((messageA, nonce_to_bitstring(NA1), NB1_), sessionKey) in
-let IA1 = MAC((messageA, nonce_to_bitstring(NA1), NB1_), sessionKey) in
-out(c, (dataA, IA1)).
-
-
+let IA1 = MAC((messageA, nonce_to_bitstring(NA1), NB1_), aId, sessionKey) in
+out(c, (dataA, IA1, aId));
+(* final I3 data *)
+in(c, (bId:id, I3:bitstring));
+if MAC((messageA, NA1), bId, sessionKey) = I3 then event Entity2Authenticated(aId, bId).
 
 
 let KeyCenter(masterA:key,masterB:key) =
@@ -48,24 +50,30 @@ let sessionKeyA = sdec(encryptA, masterA) in
 let encryptB = senc(sessionKeyA,masterB) in
 out(c, encryptB).
 
-let EntityB(masterB:key) =
+
+let EntityB(masterB:key, bId:id) =
 in(c, sendToB:bitstring);
 let sessionKey = sdec(sendToB, masterB) in
 new messageB:bitstring;
 (* After recieved shared key, starting message authentication*)
 new NB1:nonce;
 let data = senc1((messageB, nonce_to_bitstring(NB1)), sessionKey) in
-let IB1 = MAC((messageB, nonce_to_bitstring(NB1)), sessionKey) in
-out(c, (data, IB1));
+let IB1 = MAC((messageB, nonce_to_bitstring(NB1)), bId, sessionKey) in
+out(c, (data, IB1, bId));
 
 (* Bringing in new data from Entity A *)
-in(c, (dataA:bitstring, IA1:bitstring));
+in(c, (dataA:bitstring, IA1:bitstring, aId: id));
 let (messageA_:bitstring, NA1_:bitstring, NB1_:bitstring) = sdec1(dataA, sessionKey) in
-if MAC((messageA_, NA1_, NB1_), sessionKey) = IA1 then 
-if NB1 = bitstring_to_nonce(NB1_) then event MessageAuthenticated().
+if MAC((messageA_, NA1_, NB1_), aId, sessionKey) = IA1 then 
+if NB1 = bitstring_to_nonce(NB1_) then event Entity1Authenticated(aId, bId);
+let I3 = MAC((messageA_, NA1_), bId, sessionKey) in
+out(c, (bId, I3)).
+
 
 
 process
+new aId:id;
+new bId:id;
 new masterA:key;
 new masterB:key;
-(!EntityA(masterA) | !KeyCenter(masterA,masterB) | !EntityB(masterB)) 
+(!EntityA(masterA, aId) | !KeyCenter(masterA,masterB) | !EntityB(masterB, bId)) 
