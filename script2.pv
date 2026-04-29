@@ -5,15 +5,14 @@ type id.
 (* Public Channel *)
 free c: channel.
 
-(* Long-term shared keys *)
-free Kma: key.   (* A <-> KDC *)
-free Kmb: key.   (* B <-> KDC *)
+(* Long-term shared keys (kept secret from attacker) *)
+free Kma: key [private].  (* A <-> KDC *)
+free Kmb: key [private].  (* B <-> KDC *)
 
-(* Encryption Functions *)
+(* Cryptographic primitives *)
 fun senc(bitstring, key): bitstring.
 reduc forall x:bitstring, k:key; sdec(senc(x,k),k) = x.
 
-(* Key Pairing *)
 fun pair(bitstring, bitstring): bitstring.
 fun fst(bitstring): bitstring.
 fun snd(bitstring): bitstring.
@@ -25,72 +24,93 @@ fun bitstring_to_key(bitstring): key.
 equation forall x:bitstring, y:bitstring; fst(pair(x,y)) = x.
 equation forall x:bitstring, y:bitstring; snd(pair(x,y)) = y.
 
+(* MAC primitive *)
+fun mac(bitstring, key): bitstring.
+
 (* Events *)
 event A_request(id,id).
 event A_received_session(id,id,key).
 event B_received_session(id,id,key).
+event SessionKey(key).   (* session key created by KDC *)
 
 (* Entity A *)
 let A(idA:id, idB:id) =
-    (* Step 1: request session *)
-    event A_request(idA,idB);
-    out(c, pair(id_to_bitstring(idA), id_to_bitstring(idB)));
+  (* Step 1: request session *)
+  event A_request(idA,idB);
+  out(c, pair(id_to_bitstring(idA), id_to_bitstring(idB)));
 
-    (* Step 2a: receive session key *)
-    in(c, msgA:bitstring);
+  (* Step 2a: receive session key + MAC *)
+  in(c, msgA:bitstring);
+  let decA = sdec(msgA, Kma) in
+  let payloadA = fst(decA) in
+  let macA = snd(decA) in
 
-    let decA = sdec(msgA, Kma) in
-    let Ks_b = fst(decA) in
-    let Ks = bitstring_to_key(Ks_b) in
-    let ticketB = snd(decA) in
+  (* Check MAC over (Ks_b, idA, idB, ticketB) *)
+  if mac(payloadA, Kma) = macA then
+    let Ks_b = fst(payloadA) in
+    let restA = snd(payloadA) in
+    let idA_recv = fst(restA) in
+    let restA2 = snd(restA) in
+    let idB_recv = fst(restA2) in
+    let ticketB = snd(restA2) in
 
-    event A_received_session(idA,idB,Ks);
-
-    (* Step 3: forward ticket to B *)
-    out(c, ticketB).
+    (* Check identities match expected ones *)
+    if idA_recv = id_to_bitstring(idA) && idB_recv = id_to_bitstring(idB) then
+      let Ks = bitstring_to_key(Ks_b) in
+      event A_received_session(idA,idB,Ks);
+      (* Step 3: forward ticket to B *)
+      out(c, ticketB).
 
 (* Entity B *)
 let B(idA:id, idB:id) =
-    in(c, ticketB:bitstring);
+  in(c, ticketB:bitstring);
+  let decB = sdec(ticketB, Kmb) in
+  let payloadB = fst(decB) in
+  let macB = snd(decB) in
 
-    let Ks_b = sdec(ticketB, Kmb) in
-    let Ks = bitstring_to_key(Ks_b) in
+  (* Check MAC over (Ks_b, idA, idB) *)
+  if mac(payloadB, Kmb) = macB then
+    let Ks_b = fst(payloadB) in
+    let restB = snd(payloadB) in
+    let idA_recv = fst(restB) in
+    let idB_recv = snd(restB) in
 
-    event B_received_session(idA,idB,Ks).
+    (* Check identities match expected ones *)
+    if idA_recv = id_to_bitstring(idA) && idB_recv = id_to_bitstring(idB) then
+      let Ks = bitstring_to_key(Ks_b) in
+      event B_received_session(idA,idB,Ks).
 
 (* Process: Key Distribution Center *)
 let KDC =
-    in(c, req:bitstring);
+  in(c, req:bitstring);
+  let idA_b = fst(req) in
+  let idB_b = snd(req) in
 
-    let idA = fst(req) in
-    let idB = snd(req) in
+  new Ks: key;
+  event SessionKey(Ks);   (* mark this as a session key *)
 
-    new Ks: key;
+  let Ks_b = key_to_bitstring(Ks) in
 
-    (* Ticket for B *)
-    let Ks_b = key_to_bitstring(Ks) in
-    let ticketB = senc(Ks_b, Kmb) in
+  (* Ticket for B: (Ks_b, idA, idB) + MAC under Kmb *)
+  let payloadB = pair(Ks_b, pair(idA_b, idB_b)) in
+  let macB = mac(payloadB, Kmb) in
+  let ticketB = senc(pair(payloadB, macB), Kmb) in
 
-    (* Message for A: Ks + ticketB *)
-    let msgA = senc(pair(Ks_b, ticketB), Kma) in
+  (* Message for A: (Ks_b, idA, idB, ticketB) + MAC under Kma *)
+  let payloadA = pair(Ks_b, pair(idA_b, pair(idB_b, ticketB))) in
+  let macA = mac(payloadA, Kma) in
+  let msgA = senc(pair(payloadA, macA), Kma) in
 
-    (* Send to A *)
-    out(c, msgA).
+  out(c, msgA).
 
 (* Queries *)
 
-(* Authentication *)
+(* Authentication: if B accepts (idA,idB,k), then A accepted same session *)
 query idA:id, idB:id, k:key;
-    event(B_received_session(idA,idB,k)) ==> event(A_received_session(idA,idB,k)).
-
-(* Basic Secrecy *)
-query k:key; attacker(k).
+  event(B_received_session(idA,idB,k)) ==> event(A_received_session(idA,idB,k)).
 
 (* Main *)
 process
-    new idA:id;
-    new idB:id;
-    (!A(idA,idB) | !B(idA,idB) | !KDC)
-
-
-
+  new idA:id;
+  new idB:id;
+  (!A(idA,idB) | !B(idA,idB) | !KDC)
