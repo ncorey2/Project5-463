@@ -17,11 +17,10 @@ reduc forall x:bitstring, k:key; sdec(senc(x,k),k) = x.
 fun pair(bitstring, bitstring): bitstring.
 fun fst(bitstring): bitstring.
 fun snd(bitstring): bitstring.
-const tag: bitstring.
+
 fun id_to_bitstring(id): bitstring.
 fun key_to_bitstring(key): bitstring.
 fun bitstring_to_key(bitstring): key.
-fun bitstring_to_id(bitstring): id.
 
 equation forall x:bitstring, y:bitstring; fst(pair(x,y)) = x.
 equation forall x:bitstring, y:bitstring; snd(pair(x,y)) = y.
@@ -30,7 +29,6 @@ equation forall x:bitstring, y:bitstring; snd(pair(x,y)) = y.
 event A_request(id,id).
 event A_received_session(id,id,key).
 event B_received_session(id,id,key).
-event A_commit(id,id,key).
 
 (* Entity A *)
 let A(idA:id, idB:id) =
@@ -46,34 +44,19 @@ let A(idA:id, idB:id) =
     let Ks = bitstring_to_key(Ks_b) in
     let ticketB = snd(decA) in
 
-    in(c, conf:bitstring);
+    event A_received_session(idA,idB,Ks);
 
     (* Step 3: forward ticket to B *)
-    let decC = sdec(conf, Ks) in
-    if fst(decC) = id_to_bitstring(idA)
-    && snd(decC) = id_to_bitstring(idB) then
-        event A_received_session(idA,idB,Ks);
-
-    event A_commit(idA,idB,Ks);
-
     out(c, ticketB).
 
 (* Entity B *)
 let B(idA:id, idB:id) =
     in(c, ticketB:bitstring);
 
-    let decB = sdec(ticketB, Kmb) in
-    let idA_received = fst(decB) in
-    let Ks_b = snd(decB) in
+    let Ks_b = sdec(ticketB, Kmb) in
     let Ks = bitstring_to_key(Ks_b) in
 
-    (* explicit binding event *)
-    event B_accepts_ticket(bitstring_to_id(idA_received), idB, Ks);
-
-    if bitstring_to_id(idA_received) = idA then
-        event B_received_session(bitstring_to_id(idA_received), idB, Ks)
-
-    out(c, senc(pair(pair(idA_received, id_to_bitstring(idB)), tag), Ks)).
+    event B_received_session(idA,idB,Ks).
 
 (* Process: Key Distribution Center *)
 let KDC =
@@ -86,10 +69,10 @@ let KDC =
 
     (* Ticket for B *)
     let Ks_b = key_to_bitstring(Ks) in
-    let ticketB = senc(pair(idA, Ks_b), Kmb) in
+    let ticketB = senc(Ks_b, Kmb) in
 
     (* Message for A: Ks + ticketB *)
-    let msgA = senc(pair(pair(idA, idB), pair(Ks_b, ticketB)), Kma) in
+    let msgA = senc(pair(Ks_b, ticketB), Kma) in
 
     (* Send to A *)
     out(c, msgA).
@@ -98,11 +81,16 @@ let KDC =
 
 (* Authentication *)
 query idA:id, idB:id, k:key;
-    event(B_received_session(idA,idB,k)) ==> event(A_commit(idA,idB,k)).
+    event(B_received_session(idA,idB,k)) ==> event(A_received_session(idA,idB,k)).
+
+(* Basic Secrecy *)
+query k:key; attacker(k).
 
 (* Main *)
 process
     new idA:id;
     new idB:id;
-
     (!A(idA,idB) | !B(idA,idB) | !KDC)
+
+
+
