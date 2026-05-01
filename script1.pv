@@ -6,6 +6,8 @@ type id.
 
 fun nonce_to_bitstring(nonce):bitstring [data, typeConverter].
 fun bitstring_to_nonce(bitstring):nonce [data, typeConverter].
+fun key_to_bitstring(key):bitstring [data, typeConverter].
+fun bitstring_to_key(bitstring):key [data, typeConverter].
 free mA:bitstring [private].
 free mB:bitstring [private].
 fun MAC(bitstring, id, key):bitstring.
@@ -15,24 +17,43 @@ fun senc1(bitstring,key):bitstring.
 reduc forall m:key,k:key; sdec(senc(m,k),k) = m.
 reduc forall m:bitstring,k:key; sdec1(senc1(m,k),k) = m.
 
-event Entity1Authenticated(id, id).
-event Entity2Authenticated(id, id).
+event EntityAAuthenticated(id, id).
+event EntityBAuthenticated(id, id).
+event KeyCenterAuthenticated(id, id).
+event KeyAuthenticatedEntityA(id, id).
 
 query attacker(mA); attacker(mB).
-query aId:id, bId:id;
-event(Entity2Authenticated(aId, bId)) ==> event(Entity1Authenticated(aId, bId)).
+query aId:id, bId:id, keyTranslationId:id;
+event(EntityBAuthenticated(aId, bId)) ==> event(EntityAAuthenticated(aId, bId));
+event(KeyAuthenticatedEntityA(keyTranslationId, aId)) ==> event(KeyCenterAuthenticated(aId, keyTranslationId)).
 
 
 let EntityA(masterA:key, aId:id) =
 new sessionKey:key;
-let encryptA = senc(sessionKey, masterA) in
-out(c, encryptA);
-in(c, encryptB:bitstring);
+(* Creating nonce to ensure Key Center is legitimate *)
+new NA:nonce;
+let encryptA = senc1((key_to_bitstring(sessionKey), nonce_to_bitstring(NA)), masterA) in
+let IA = MAC(key_to_bitstring(sessionKey), aId, masterA) in
+out(c, (encryptA, IA, aId));
+in(c, (encryptKey:bitstring, authentication:bitstring, keyTranslationId:id));
+let (keyNonce:bitstring, NA_:bitstring)= sdec1(encryptKey, masterA) in
+(*If nonce is equal to EntityA's nonce and MAC is true then KeyCenter is authenticated and message is authenticated*)
+if bitstring_to_nonce(NA_) = NA then
+if MAC((keyNonce, bitstring_to_nonce(NA_)), keyTranslationId, masterA) = authentication then event KeyCenterAuthenticated(aId, keyTranslationId);
+(* Sending data back to key for Verification*)
+let keyAuthentication = senc1(keyNonce, masterA) in
+let IAKey1 = MAC(keyNonce, aId, masterA) in
+out(c, (keyAuthentication, IAKey1));
+in(c, (encryptB:bitstring, IK:bitstring));
+(* Entity A already has keyTranslationId, so they use it again to ensure message integrity *)
+if MAC((key_to_bitstring(sessionKey)), keyTranslationId, masterA) = IK  then
 let sendToB = encryptB in
 out(c, sendToB);
 (* Bringing in new data from Entity B *)
 in(c, (data:bitstring, IB1:bitstring, bId:id));
 let (messageB_:bitstring,NB1_:bitstring) = sdec1(data, sessionKey) in
+
+(* ensuring message was not altered *)
 if MAC((messageB_, NB1_), bId, sessionKey) = IB1 then
 new NA1:nonce;
 new messageA:bitstring;
@@ -40,16 +61,30 @@ let dataA = senc1((messageA, nonce_to_bitstring(NA1), NB1_), sessionKey) in
 let IA1 = MAC((messageA, nonce_to_bitstring(NA1), NB1_), aId, sessionKey) in
 out(c, (dataA, IA1, aId));
 (* final I3 data *)
-in(c, (bId:id, I3:bitstring));
-if MAC((messageA, NA1), bId, sessionKey) = I3 then event Entity2Authenticated(aId, bId).
+in(c, (bId_:id, I3:bitstring));
+if MAC((messageA, NA1), bId_, sessionKey) = I3 then event EntityBAuthenticated(aId, bId_).
 
 
-let KeyCenter(masterA:key,masterB:key) =
-in(c, encryptA:bitstring);
-let sessionKeyA = sdec(encryptA, masterA) in
-let encryptB = senc(sessionKeyA,masterB) in
-out(c, encryptB).
+let KeyCenter(masterA:key,masterB:key, keyTranslationId:id) =
+in(c, (encryptA:bitstring, IA:bitstring, aId_:id));
+let (sessionKeyA:bitstring, NA_:bitstring) = sdec1(encryptA, masterA) in
+(* Ensuring that the message wasn't altered *)
+if MAC((sessionKeyA, NA_), aId_, masterA) = IA then
+(* Ensuring A is actually A*)
+new keyNonce:nonce;
+let encryptKey = senc1((nonce_to_bitstring(keyNonce), NA_), masterA) in
+let authentication = MAC((nonce_to_bitstring(keyNonce), NA_), keyTranslationId, masterA) in
+(* Sending Verification Checks to A*)
+out(c, (encryptKey, authentication, keyTranslationId));
 
+in(c, (keyAuthentication:bitstring, IAKey1:bitstring));
+let keyNonce_:bitstring = sdec1(keyAuthentication, masterA) in
+(* If the nonce given is equal to the Key Nonce and message hasn't been tampered with, Entity A is Authenticated *)
+if bitstring_to_nonce(keyNonce_) = keyNonce then
+if MAC(nonce_to_bitstring(keyNonce), aId_, masterA) = IAKey1 then event KeyAuthenticatedEntityA(keyTranslationId, aId_);
+let encryptB = senc(bitstring_to_key(sessionKeyA),masterB) in
+let IK = MAC(sessionKeyA, keyTranslationId, masterA) in
+out(c, (encryptB, IK)).
 
 let EntityB(masterB:key, bId:id) =
 in(c, sendToB:bitstring);
@@ -65,7 +100,7 @@ out(c, (data, IB1, bId));
 in(c, (dataA:bitstring, IA1:bitstring, aId: id));
 let (messageA_:bitstring, NA1_:bitstring, NB1_:bitstring) = sdec1(dataA, sessionKey) in
 if MAC((messageA_, NA1_, NB1_), aId, sessionKey) = IA1 then 
-if NB1 = bitstring_to_nonce(NB1_) then event Entity1Authenticated(aId, bId);
+if NB1 = bitstring_to_nonce(NB1_) then event EntityAAuthenticated(aId, bId);
 let I3 = MAC((messageA_, NA1_), bId, sessionKey) in
 out(c, (bId, I3)).
 
@@ -74,6 +109,7 @@ out(c, (bId, I3)).
 process
 new aId:id;
 new bId:id;
+new keyTranslationId:id;
 new masterA:key;
 new masterB:key;
-(!EntityA(masterA, aId) | !KeyCenter(masterA,masterB) | !EntityB(masterB, bId)) 
+(!EntityA(masterA, aId) | !KeyCenter(masterA, masterB, keyTranslationId) | !EntityB(masterB, bId)) 
