@@ -40,22 +40,21 @@ let (keyNonce:bitstring, NA_:bitstring)= sdec1(encryptKey, masterA) in
 (*If nonce is equal to EntityA's nonce and MAC is true then KeyCenter is authenticated and message is authenticated*)
 if bitstring_to_nonce(NA_) = NA then
 if MAC((keyNonce, bitstring_to_nonce(NA_)), keyTranslationId, masterA) = authentication then event KeyCenterAuthenticated(aId, keyTranslationId);
+
 (* Sending data back to key for Verification*)
 let keyAuthentication = senc1(keyNonce, masterA) in
 let IAKey1 = MAC(keyNonce, aId, masterA) in
 out(c, (keyAuthentication, IAKey1));
 in(c, (encryptB:bitstring, IK:bitstring));
 (* Entity A already has keyTranslationId, so they use it again to ensure message integrity *)
-if MAC((key_to_bitstring(sessionKey)), keyTranslationId, masterA) = IK  then
-let sendToB = encryptB in
+if MAC((key_to_bitstring(sessionKey)), keyTranslationId, masterA) = IK then let sendToB = encryptB in
 out(c, sendToB);
+
 (* Bringing in new data from Entity B *)
 in(c, (data:bitstring, IB1:bitstring, bId:id));
 let (messageB_:bitstring,NB1_:bitstring) = sdec1(data, sessionKey) in
-
 (* ensuring message was not altered *)
-if MAC((messageB_, NB1_), bId, sessionKey) = IB1 then
-new NA1:nonce;
+if MAC((messageB_, NB1_), bId, sessionKey) = IB1 then new NA1:nonce;
 new messageA:bitstring;
 let dataA = senc1((messageA, nonce_to_bitstring(NA1), NB1_), sessionKey) in
 let IA1 = MAC((messageA, nonce_to_bitstring(NA1), NB1_), aId, sessionKey) in
@@ -99,11 +98,9 @@ out(c, (data, IB1, bId));
 (* Bringing in new data from Entity A *)
 in(c, (dataA:bitstring, IA1:bitstring, aId: id));
 let (messageA_:bitstring, NA1_:bitstring, NB1_:bitstring) = sdec1(dataA, sessionKey) in
-if MAC((messageA_, NA1_, NB1_), aId, sessionKey) = IA1 then 
-if NB1 = bitstring_to_nonce(NB1_) then event EntityAAuthenticated(aId, bId);
+if MAC((messageA_, NA1_, NB1_), aId, sessionKey) = IA1 then if NB1 = bitstring_to_nonce(NB1_) then event EntityAAuthenticated(aId, bId);
 let I3 = MAC((messageA_, NA1_), bId, sessionKey) in
 out(c, (bId, I3)).
-
 
 
 process
